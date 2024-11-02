@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.10)
+project(cppchallenger)
+if (UNIX)
+  message(status "** Setting GCC flags")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++23 -fexceptions -g -Wall")
+elseif(WIN32)
+  message(status "** Setting MSVC flags")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc /std:c++latest")
+  
+  add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+endif()
+message(status "** CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
+
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+add_subdirectory(arr2d)
+add_subdirectory(countwords)
+add_subdirectory(enumarray)
+add_subdirectory(ipv4)
+add_subdirectory(stackvector)
+add_subdirectory(stltrick)
+
