@@ -19,3 +19,4 @@ add_subdirectory(ipv4)
 add_subdirectory(stackvector)
 add_subdirectory(stltrick)
 
+add_subdirectory(task)
