@@ -58,11 +58,9 @@ public:
     }
 
 private:
-    std::tuple<Args &...> args_;
-
-    FT m_fn;
-
     uint32_t freq_call_ = 0;
+    FT m_fn;
+    std::tuple<Args &...> args_;
 };
 
 template <typename R, typename... Args>

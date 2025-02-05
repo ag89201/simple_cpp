@@ -18,5 +18,7 @@ add_subdirectory(enumarray)
 add_subdirectory(ipv4)
 add_subdirectory(stackvector)
 add_subdirectory(stltrick)
-
+add_subdirectory(block_alloc)
+add_subdirectory(alg)
 add_subdirectory(task)
+add_subdirectory(disp)

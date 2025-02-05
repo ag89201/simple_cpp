@@ -4,19 +4,25 @@
 
 namespace heap
 {
-
-    template <typename guard>
+    constexpr size_t HEAP_ALIGN = sizeof(int);
+    constexpr size_t HEAP_ALIGN_MASK = HEAP_ALIGN - 1;
+    
+    
+    template <typename Guard>
     class scope_guard
     {
     public:
-        scope_guard(guard &g) : g_(g) { g_.lock(); }
-        ~scope_guard() { g_.unlock(); }
+        explicit scope_guard(Guard &g) : guard_(g) { guard_.lock(); }
+        ~scope_guard() { guard_.unlock(); }
+
+        scope_guard(const scope_guard &) = delete;
+        scope_guard &operator=(const scope_guard &) = delete;
 
     private:
-        guard &g_;
+        Guard &guard_;
     };
 
-    struct default_gurad
+    struct default_guard
     {
         void lock() { /*std::cout << "lock" << std::endl;*/ }
         void unlock() { /*std::cout << "unlock" << std::endl;*/ }
@@ -49,11 +55,10 @@ namespace heap
         /// @param size
         /// @param start
         /// @return the pointer to new MCB
-        memControlBlock *split(size_t size, memControlBlock *start)
+        memControlBlock *split(size_t size, memControlBlock *start) noexcept
         {
-            uintptr_t addr = (uintptr_t)this + size;
-
-            memControlBlock *new_block = (memControlBlock *)addr;
+            size = align_size(size);
+            memControlBlock *new_block = reinterpret_cast<memControlBlock *>(reinterpret_cast<uintptr_t>(this) + size);
 
             new_block->next = next;
             new_block->prev = this;
@@ -74,7 +79,7 @@ namespace heap
 
         /// @brief join current memory chunk with the next one
         /// @param start
-        void merge_with_next(memControlBlock *start)
+        void merge_with_next(memControlBlock *start) noexcept
         {
             memControlBlock *other = next;
             ts.size += other->ts.size;
@@ -84,17 +89,24 @@ namespace heap
                 other->prev = this;
             }
         }
-        void *pool() { return this + 1; }
+        void *pool() noexcept { return this + 1; }
+
+        size_t align_size(size_t size) const noexcept
+        {
+            return (size + HEAP_ALIGN_MASK) & ~HEAP_ALIGN_MASK;
+        }
     };
 
-    template <typename guard>
+    template <typename Guard = default_guard>
     class allocator
     {
     private:
-        static size_t const HEAP_ALIGN = sizeof(int);
-
-        void init(memControlBlock *pstart, size_t size_bytes)
+        void init(memControlBlock *pstart, size_t size_bytes) noexcept
         {
+            if (size_bytes < sizeof(memControlBlock))
+            {
+                return;
+            }
             pstart->next = pstart;
             pstart->prev = pstart;
 
@@ -102,65 +114,67 @@ namespace heap
             pstart->ts.available = memControlBlock::FREE;
         }
 
-        memControlBlock *start;
-        memControlBlock *freemem;
-        guard Guard;
+        memControlBlock *start_;
+        memControlBlock *freemem_;
+        Guard guard_;
 
     public:
-        struct summary
+        struct Summary
         {
-            struct info
+            struct Info
             {
-                size_t Blocks;
-                size_t Block_max_size;
-                size_t Size;
+                size_t blocks;
+                size_t block_max_size;
+                size_t size;
 
-            } Used, Free;
+            } used, free;
         };
 
-        summary info()
+        Summary info() noexcept
         {
-            summary s;
-            s.Used.Size = 0;
-            s.Used.Blocks = 0;
-            s.Used.Block_max_size = 0;
+            Summary s;
+            s.used.size = 0;
+            s.used.blocks = 0;
+            s.used.block_max_size = 0;
 
-            s.Free.Size = 0;
-            s.Free.Blocks = 0;
-            s.Free.Block_max_size = 0;
+            s.free.size = 0;
+            s.free.blocks = 0;
+            s.free.block_max_size = 0;
 
-            memControlBlock *mcb = freemem;
+            memControlBlock *mcb = freemem_;
             do
             {
-                auto *info = (mcb->ts.available == memControlBlock::FREE) ? &s.Free : &s.Used;
-                ++info->Blocks;
-                info->Size += mcb->ts.size;
-                if (info->Block_max_size < mcb->ts.size)
+                auto *info = (mcb->ts.available == memControlBlock::FREE) ? &s.free : &s.used;
+                ++info->blocks;
+                info->size += mcb->ts.size;
+                if (info->block_max_size < mcb->ts.size)
                 {
-                    info->Block_max_size = mcb->ts.size;
+                    info->block_max_size = mcb->ts.size;
                 }
                 mcb = mcb->next;
 
-            } while (mcb != start);
+            } while (mcb != start_);
             return s;
         }
 
         template <size_t size_bytes>
-        allocator(pool<size_bytes> &pool)
-            : start((memControlBlock *)pool.Pool),
-              freemem((memControlBlock *)pool.Pool),
-              Guard()
+        explicit allocator(pool<size_bytes> &pool) noexcept
+            : start_((memControlBlock *)pool.Pool),
+              freemem_((memControlBlock *)pool.Pool),
+              guard_()
         {
-            init(start, sizeof(pool));
+            init(start_, sizeof(pool));
         }
 
-        void *allocate(size_t size)
+        virtual ~allocator() = default;
+
+        void *allocate(size_t size) noexcept
         {
 
             size = (size + sizeof(memControlBlock) + (HEAP_ALIGN - 1)) & ~(HEAP_ALIGN - 1);
-            if (size > freemem->ts.size)
+            if (size > freemem_->ts.size)
             {
-                std::cout<<"null\n";
+
                 return nullptr;
             }
 
@@ -172,9 +186,9 @@ namespace heap
 
             size_t free_cnt = 0;
 
-            scope_guard<guard> ScopeGuard(Guard);
+            scope_guard<Guard> ScopeGuard(guard_);
 
-            memControlBlock *tptr = freemem;
+            memControlBlock *tptr = freemem_;
 
             for (;;)
             {
@@ -205,12 +219,12 @@ namespace heap
                 }
 
                 tptr = tptr->next;
-                if (tptr == start)
+                if (tptr == start_)
                 {
                     if (xptr != 0)
                     {
                         tptr = xptr;
-                        xptr = tptr->split(size, start);
+                        xptr = tptr->split(size, start_);
                         Allocated = tptr->pool();
                         break;
                     }
@@ -219,12 +233,12 @@ namespace heap
 
             if ((free_cnt == 1) && (Allocated))
             {
-                freemem = tptr->next;
+                freemem_ = tptr->next;
             }
 
             return Allocated;
         }
-        void deallocate(void *pool)
+        void deallocate(void *pool) noexcept
         {
             if (pool == nullptr || ((uintptr_t)pool & (HEAP_ALIGN - 1)))
             {
@@ -234,10 +248,10 @@ namespace heap
             memControlBlock *xptr;
             memControlBlock *tptr = (memControlBlock *)pool - 1;
 
-            scope_guard<guard> ScopeGuard(Guard);
+            scope_guard<Guard> ScopeGuard(guard_);
 
             xptr = tptr->prev;
-            if ((xptr != tptr && xptr->next != tptr) || pool < start)
+            if ((xptr != tptr && xptr->next != tptr) || pool < start_)
             {
                 return;
             }
@@ -246,37 +260,48 @@ namespace heap
 
             xptr = tptr->next;
 
-            if (xptr->ts.available == memControlBlock::FREE && xptr != start)
+            if (xptr && xptr->ts.available == memControlBlock::FREE && xptr != start_)
             {
-                tptr->merge_with_next(start);
+                tptr->merge_with_next(start_);
             }
 
             xptr = tptr->prev;
 
-            if (xptr->ts.available == memControlBlock::FREE && tptr != start)
+            if (xptr && xptr->ts.available == memControlBlock::FREE && tptr != start_)
             {
-                xptr->merge_with_next(start);
+                xptr->merge_with_next(start_);
                 tptr = xptr;
             }
 
-            if (tptr < freemem)
+            if (tptr < freemem_)
             {
-                freemem = tptr;
+                freemem_ = tptr;
             }
+        }
+
+        size_t max_size() noexcept
+        {
+            return info().free.size;
         }
     };
 
-    template <typename T, typename Allocator = allocator<default_gurad>>
-    class mallocator : Allocator
+    template <typename T, typename Allocator = allocator<default_guard>>
+    class mallocator : public Allocator
     {
     public:
         using value_type = T;
 
         template <size_t size_bytes>
-        mallocator(pool<size_bytes> &pool) : Allocator(pool) {}
+        explicit mallocator(pool<size_bytes> &pool) : Allocator(pool) {}
 
         T *allocate(size_t n)
         {
+            size_t size = sizeof(T) * n;
+
+            if (size > Allocator::max_size())
+            {
+                return nullptr;
+            }
             return static_cast<T *>(Allocator::allocate(n * sizeof(T)));
         }
 
@@ -287,12 +312,10 @@ namespace heap
 
         void destroy(T *p)
         {
-            p->~T();
-        }
-
-        auto info()
-        {
-            return Allocator::info();
+            if (p)
+            {
+                p->~T();
+            }
         }
     };
 }
